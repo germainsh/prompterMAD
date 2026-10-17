@@ -1,0 +1,756 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Prompter">
+<meta name="theme-color" content="#000000">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icono-180.png">
+<link rel="icon" type="image/png" href="icono-180.png">
+<title>Prompter</title>
+<style>
+  /* Version iPad del teleprompter. Independiente de la de la Mac:
+     su propio guion, su propia calibracion, sus propios controles. */
+  :root{
+    --texto: #ffffff;
+    --fondo: #000000;
+    --reticula: #ff0000;
+    --tam: 48px;
+    --interlineado: 1.5;
+    --ancho: 84vw;
+    --retX: 50%;
+    --retY: 50%;
+    --lecY: 40%;
+  }
+  *{box-sizing:border-box; margin:0; padding:0; -webkit-tap-highlight-color:transparent;}
+  html,body{height:100%; background:var(--fondo); overflow:hidden; overscroll-behavior:none;}
+  body{
+    font-family: -apple-system, "Helvetica Neue", Helvetica, Arial, sans-serif;
+    color:var(--texto);
+    touch-action:manipulation;          /* sin zoom por doble toque */
+    -webkit-text-size-adjust:100%;
+  }
+
+  /* ---------- Zona de texto ---------- */
+  #visor{
+    position:absolute; inset:0;
+    overflow-y:auto; overflow-x:hidden;
+    scrollbar-width:none;
+    -webkit-overflow-scrolling:touch;
+  }
+  #visor::-webkit-scrollbar{display:none;}
+  body.reproduciendo #visor{cursor:none;}
+
+  #guion{
+    width:var(--ancho);
+    margin:0 auto;
+    padding:50vh 0;
+    font-size:var(--tam);
+    line-height:var(--interlineado);
+    font-weight:600;
+    letter-spacing:0.01em;
+    outline:none;
+    white-space:pre-wrap;
+    word-wrap:break-word;
+    -webkit-user-select:none; user-select:none;
+    -webkit-touch-callout:none;
+  }
+  body.editando #guion{
+    -webkit-user-select:text; user-select:text;
+    -webkit-touch-callout:default;
+    outline:1px dashed #555; outline-offset:12px;
+  }
+  #guion p{margin:0 0 0.9em 0;}
+  #guion.vacio:before{
+    content:"Toca la parte de arriba para abrir el menú y carga tu guion con «Abrir .docx» o «Pegar».";
+    opacity:.35;
+  }
+
+  body.espejo #guion{ transform:scaleX(-1); }
+  body.espejo-v #guion{ transform:scaleY(-1); }
+  body.espejo.espejo-v #guion{ transform:scale(-1,-1); }
+
+  /* ---------- Reticula ---------- */
+  #reticula{position:fixed; inset:0; pointer-events:none; z-index:50;}
+  #reticula.oculta{display:none;}
+  .linea{position:absolute; background:var(--reticula); opacity:.85;}
+  .lh{height:1px; left:var(--retX); top:var(--retY); width:44px; transform:translate(-50%,-50%);}
+  .lv{width:1px; left:var(--retX); top:var(--retY); height:44px; transform:translate(-50%,-50%);}
+  #hueco{
+    position:absolute; left:var(--retX); top:var(--retY);
+    width:14px; height:14px; transform:translate(-50%,-50%);
+    background:var(--fondo);
+  }
+  #circulo{
+    position:absolute; left:var(--retX); top:var(--retY);
+    width:26px; height:26px; transform:translate(-50%,-50%);
+    border:1px solid var(--reticula); border-radius:50%; opacity:.85;
+  }
+  #punto{
+    position:absolute; left:var(--retX); top:var(--retY);
+    width:3px; height:3px; transform:translate(-50%,-50%);
+    background:var(--reticula); border-radius:50%;
+  }
+
+  /* ---------- Guia de lectura ---------- */
+  #lectura{
+    position:fixed; top:var(--lecY);
+    left:  max(0px, calc((100% - var(--ancho)) / 2 - 28px));
+    right: max(0px, calc((100% - var(--ancho)) / 2 - 28px));
+    pointer-events:none; z-index:40;
+  }
+  #lectura.oculta{display:none;}
+  #lectura .flecha{
+    position:absolute; top:-9px; width:0; height:0;
+    border-top:9px solid transparent; border-bottom:9px solid transparent;
+  }
+  #lectura .izq{left:0;  border-left:16px solid var(--reticula);}
+  #lectura .der{right:0; border-right:16px solid var(--reticula);}
+
+  /* ---------- Barra ---------- */
+  #barra{
+    position:fixed; top:0; left:0; right:0; z-index:100;
+    padding: max(10px, env(safe-area-inset-top)) max(14px, env(safe-area-inset-right)) 10px max(14px, env(safe-area-inset-left));
+    background:#121212;
+    border-bottom:1px solid #333;
+    font-size:14px;
+    max-height:78vh; overflow-y:auto;
+    transition:opacity .25s, transform .25s;
+  }
+  #barra.oculta{opacity:0; transform:translateY(-100%); pointer-events:none;}
+  .fila{display:flex; flex-wrap:wrap; gap:8px; align-items:center;}
+  .sep{width:1px; height:26px; background:#444; margin:0 2px;}
+
+  button{
+    background:#2a2a2a; color:#eee; border:1px solid #444;
+    padding:9px 14px; min-height:40px; border-radius:8px;
+    font-size:15px; font-family:inherit; cursor:pointer;
+  }
+  button:active{background:#3a3a3a;}
+  button.activo{background:#b00; border-color:#d00; color:#fff;}
+
+  #ajustes{display:none; margin-top:12px;}
+  #barra.con-ajustes #ajustes{display:block;}
+  .rejilla{
+    display:grid; gap:10px 22px;
+    grid-template-columns:repeat(auto-fill, minmax(320px, 1fr));
+  }
+  .rejilla label{display:flex; align-items:center; gap:10px; color:#bbb;}
+  .rejilla label span{min-width:104px;}
+  .rejilla input[type=range]{flex:1; min-width:80px; height:28px;}
+  .val{
+    color:#fff; width:68px; text-align:right;
+    background:#1e1e1e; border:1px solid #444; border-radius:6px;
+    padding:7px 8px; font-size:15px; font-family:inherit;
+    -moz-appearance:textfield;
+  }
+  .val::-webkit-inner-spin-button, .val::-webkit-outer-spin-button{-webkit-appearance:none; margin:0;}
+  .val:focus{outline:none; border-color:#c00; background:#252525;}
+  .botones-ajustes{margin-top:12px;}
+  .estado{margin-top:10px; color:#777; font-size:13px;}
+
+  /* ---------- Aviso flotante ---------- */
+  #aviso{
+    position:fixed; left:50%; bottom:max(24px, env(safe-area-inset-bottom));
+    transform:translate(-50%, 20px);
+    background:rgba(30,30,30,.94); color:#fff;
+    padding:10px 16px; border-radius:10px; font-size:15px;
+    max-width:90vw; text-align:center;
+    opacity:0; pointer-events:none; z-index:200;
+    transition:opacity .25s, transform .25s;
+  }
+  #aviso.visible{opacity:1; transform:translate(-50%, 0);}
+</style>
+</head>
+<body>
+
+<div id="barra">
+  <div class="fila">
+    <button id="btnPlay">▶︎ Reproducir</button>
+    <button id="btnReset">↺ Inicio</button>
+    <span class="sep"></span>
+    <button id="btnAbrir">Abrir .docx</button>
+    <button id="btnPegar">Pegar</button>
+    <button id="btnEditar">Editar</button>
+    <span class="sep"></span>
+    <button id="btnRueda">🖱 Rueda: mueve texto</button>
+    <button id="btnAjustes">Ajustes ▾</button>
+    <button id="btnFull">Pantalla completa</button>
+  </div>
+
+  <div id="ajustes">
+    <div class="rejilla">
+      <label><span>Velocidad</span><input type="range" id="vel" min="0" max="300" step="1" value="60"><input type="number" class="val" id="velNum" inputmode="decimal"></label>
+      <label><span>Tamaño</span><input type="range" id="tam" min="20" max="160" step="1" value="48"><input type="number" class="val" id="tamNum" inputmode="decimal"></label>
+      <label><span>Ancho</span><input type="range" id="ancho" min="40" max="100" step="1" value="84"><input type="number" class="val" id="anchoNum" inputmode="decimal"></label>
+      <label><span>Interlineado</span><input type="range" id="inter" min="10" max="25" step="1" value="15"><input type="number" class="val" id="interNum" inputmode="decimal"></label>
+      <label><span>Retícula ↕</span><input type="range" id="retY" min="0" max="100" step="0.25" value="50"><input type="number" class="val" id="retYNum" inputmode="decimal"></label>
+      <label><span>Retícula ↔</span><input type="range" id="retX" min="0" max="100" step="0.25" value="50"><input type="number" class="val" id="retXNum" inputmode="decimal"></label>
+      <label><span>Guía ↕</span><input type="range" id="lecY" min="0" max="100" step="0.25" value="40"><input type="number" class="val" id="lecYNum" inputmode="decimal"></label>
+      <label><span>Sensib. rueda</span><input type="range" id="sens" min="1" max="40" step="1" value="10"><input type="number" class="val" id="sensNum" inputmode="decimal"></label>
+    </div>
+    <div class="fila botones-ajustes">
+      <button id="btnEspejo">Espejo H</button>
+      <button id="btnEspejoV">Espejo V</button>
+      <button id="btnReticula">Retícula</button>
+      <button id="btnLectura">Guía lectura</button>
+      <button id="btnInvertir">Invertir rueda</button>
+      <button id="btnLimpiar">Borrar texto</button>
+    </div>
+    <div class="estado" id="estado"></div>
+  </div>
+</div>
+
+<input type="file" id="archivo" accept=".docx,.txt,.md,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain" hidden>
+
+<div id="visor">
+  <div id="guion" contenteditable="false" spellcheck="false"></div>
+</div>
+
+<div id="lectura">
+  <div class="flecha izq"></div>
+  <div class="flecha der"></div>
+</div>
+
+<div id="reticula">
+  <div class="linea lh"></div>
+  <div class="linea lv"></div>
+  <div id="hueco"></div>
+  <div id="circulo"></div>
+  <div id="punto"></div>
+</div>
+
+<div id="aviso"></div>
+
+<script>
+(function(){
+  'use strict';
+  const $ = function(id){ return document.getElementById(id); };
+  const raiz = document.documentElement, cuerpo = document.body;
+  const visor = $('visor'), guion = $('guion'), barra = $('barra'), aviso = $('aviso'), archivo = $('archivo');
+
+  const K_AJUSTES = 'prompter.ipad.ajustes.v1';
+  const K_GUION   = 'prompter.ipad.guion.v1';
+
+  let reproduciendo = false, velocidad = 60, resto = 0, ultimo = 0;
+  let editando = false;
+  let modoRueda = 'texto', invertirRueda = false, acumRueda = 0, ruedaVista = false;
+
+  /* ---------- Aviso flotante ---------- */
+  let tAviso = null;
+  function avisar(texto, ms){
+    aviso.textContent = texto;
+    aviso.classList.add('visible');
+    clearTimeout(tAviso);
+    tAviso = setTimeout(function(){ aviso.classList.remove('visible'); }, ms || 1800);
+  }
+
+  function revisarVacio(){
+    guion.classList.toggle('vacio', guion.textContent.trim() === '');
+  }
+
+  /* ---------- Controles: slider + casilla ----------
+     "factor": el slider guarda un entero (15) y la casilla muestra el valor real (1.5). */
+  const pares = [
+    {id:'vel',   min:0,   max:300, paso:1,    factor:1,  def:60},
+    {id:'tam',   min:20,  max:160, paso:1,    factor:1,  def:48},
+    {id:'ancho', min:40,  max:100, paso:1,    factor:1,  def:84},
+    {id:'inter', min:1,   max:2.5, paso:0.1,  factor:10, def:1.5},
+    {id:'retY',  min:0,   max:100, paso:0.25, factor:1,  def:50},
+    {id:'retX',  min:0,   max:100, paso:0.25, factor:1,  def:50},
+    {id:'lecY',  min:0,   max:100, paso:0.25, factor:1,  def:40},
+    {id:'sens',  min:0.1, max:4,   paso:0.1,  factor:10, def:1}
+  ].map(function(p){ p.s = $(p.id); p.n = $(p.id + 'Num'); return p; });
+  const ctl = {};
+  pares.forEach(function(p){ ctl[p.id] = p; });
+
+  function valor(id){ return (+ctl[id].s.value) / ctl[id].factor; }
+  function ponerValor(id, v){
+    const p = ctl[id];
+    v = Math.min(p.max, Math.max(p.min, v));
+    p.s.value = Math.round(v * p.factor * 100) / 100;
+  }
+
+  /* No pisa la casilla en la que estas tecleando. */
+  function sincronizarCasillas(){
+    pares.forEach(function(p){
+      if(document.activeElement === p.n) return;
+      p.n.value = parseFloat(valor(p.id).toFixed(2));
+    });
+  }
+
+  function aplicar(){
+    velocidad = valor('vel');
+    raiz.style.setProperty('--tam', valor('tam') + 'px');
+    raiz.style.setProperty('--ancho', valor('ancho') + 'vw');
+    raiz.style.setProperty('--interlineado', valor('inter').toFixed(1));
+    raiz.style.setProperty('--retY', valor('retY') + '%');
+    raiz.style.setProperty('--retX', valor('retX') + '%');
+    raiz.style.setProperty('--lecY', valor('lecY') + '%');
+    sincronizarCasillas();
+    guardarAjustes();
+  }
+
+  pares.forEach(function(p){
+    p.n.min = p.min; p.n.max = p.max; p.n.step = p.paso;
+    p.s.addEventListener('input', aplicar);
+    p.n.addEventListener('input', function(){
+      const v = parseFloat(p.n.value);
+      if(isNaN(v)) return;                       // dejar teclear "5" camino a "58.75"
+      ponerValor(p.id, v);
+      aplicar();
+    });
+    p.n.addEventListener('change', function(){   // al confirmar, corregir lo que quedo a medias
+      let v = parseFloat(p.n.value);
+      if(isNaN(v)) v = p.def;
+      ponerValor(p.id, v);
+      p.n.value = parseFloat(valor(p.id).toFixed(2));
+      aplicar();
+    });
+    p.n.addEventListener('keydown', function(e){
+      if(e.key === 'Enter' || e.key === 'Escape'){ e.preventDefault(); p.n.blur(); }
+    });
+    p.s.addEventListener('dblclick', function(){ ponerValor(p.id, p.def); aplicar(); });
+  });
+
+  /* ---------- Guardado (solo en este iPad) ---------- */
+  function guardarAjustes(){
+    try{
+      const v = {};
+      pares.forEach(function(p){ v[p.id] = valor(p.id); });
+      localStorage.setItem(K_AJUSTES, JSON.stringify({
+        v: v,
+        espejo:   cuerpo.classList.contains('espejo'),
+        espejoV:  cuerpo.classList.contains('espejo-v'),
+        reticula: !$('reticula').classList.contains('oculta'),
+        lectura:  !$('lectura').classList.contains('oculta'),
+        rueda: modoRueda,
+        invertir: invertirRueda
+      }));
+    }catch(e){}
+  }
+
+  let tGuion = null;
+  function guardarGuion(){
+    clearTimeout(tGuion);
+    tGuion = setTimeout(function(){
+      try{ localStorage.setItem(K_GUION, guion.innerHTML); }
+      catch(e){ avisar('No pude guardar el guion en este iPad', 3000); }
+    }, 300);
+  }
+
+  function cargar(){
+    try{
+      const g = localStorage.getItem(K_GUION);
+      if(g) guion.innerHTML = g;
+      const d = JSON.parse(localStorage.getItem(K_AJUSTES) || 'null');
+      if(!d) return;
+      if(d.v) Object.keys(d.v).forEach(function(id){ if(ctl[id] && d.v[id] != null) ponerValor(id, d.v[id]); });
+      cuerpo.classList.toggle('espejo', !!d.espejo);
+      cuerpo.classList.toggle('espejo-v', !!d.espejoV);
+      $('reticula').classList.toggle('oculta', d.reticula === false);
+      $('lectura').classList.toggle('oculta', d.lectura === false);
+      if(d.rueda === 'texto' || d.rueda === 'velocidad') modoRueda = d.rueda;
+      invertirRueda = !!d.invertir;
+    }catch(e){}
+  }
+
+  /* ---------- Texto ---------- */
+  function limpiar(texto){
+    texto = String(texto)
+      .replace(/\r\n?/g, '\n')
+      .replace(/\u00a0/g, ' ')
+      .replace(/[\u2028\u2029\v\f]/g, '\n');
+    const salida = [];
+    let vacias = 0;
+    texto.split('\n').forEach(function(bruta){
+      const l = bruta.replace(/\t/g, ' ').trim();
+      if(l === ''){ vacias++; if(vacias > 1) return; } else { vacias = 0; }
+      salida.push(l);
+    });
+    while(salida.length && salida[0] === '') salida.shift();
+    while(salida.length && salida[salida.length - 1] === '') salida.pop();
+    return salida;
+  }
+
+  function ponerTexto(lineas){
+    const frag = document.createDocumentFragment();
+    lineas.forEach(function(l){
+      const p = document.createElement('p');
+      p.textContent = l === '' ? '\u00a0' : l;
+      frag.appendChild(p);
+    });
+    guion.replaceChildren(frag);
+    visor.scrollTop = 0;
+    revisarVacio();
+    guardarGuion();
+    return lineas.reduce(function(n, l){ return n + (l ? l.split(/\s+/).length : 0); }, 0);
+  }
+
+  /* ---------- Lector de .docx sin librerias ----------
+     Un .docx es un zip; el texto vive en word/document.xml. Se descomprime
+     con DecompressionStream (Safari 16.4+), sin depender de internet. */
+  async function leerDocx(buf){
+    const u8 = new Uint8Array(buf), dv = new DataView(buf);
+    let fin = -1;
+    for(let i = u8.length - 22; i >= Math.max(0, u8.length - 65557); i--){
+      if(dv.getUint32(i, true) === 0x06054b50){ fin = i; break; }
+    }
+    if(fin < 0) throw new Error('No parece un .docx válido');
+    const total = dv.getUint16(fin + 10, true);
+    let p = dv.getUint32(fin + 16, true);
+    for(let n = 0; n < total; n++){
+      if(dv.getUint32(p, true) !== 0x02014b50) break;
+      const metodo = dv.getUint16(p + 10, true);
+      const tamComp = dv.getUint32(p + 20, true);
+      const lNom = dv.getUint16(p + 28, true), lExt = dv.getUint16(p + 30, true), lCom = dv.getUint16(p + 32, true);
+      const local = dv.getUint32(p + 42, true);
+      const nombre = new TextDecoder().decode(u8.subarray(p + 46, p + 46 + lNom));
+      if(nombre === 'word/document.xml'){
+        const ini = local + 30 + dv.getUint16(local + 26, true) + dv.getUint16(local + 28, true);
+        const datos = u8.subarray(ini, ini + tamComp);
+        let xml;
+        if(metodo === 0){
+          xml = new TextDecoder().decode(datos);
+        }else if(metodo === 8){
+          if(typeof DecompressionStream === 'undefined') throw new Error('Este iPad no puede abrir .docx (actualiza iPadOS); usa «Pegar»');
+          const flujo = new Blob([datos]).stream().pipeThrough(new DecompressionStream('deflate-raw'));
+          xml = await new Response(flujo).text();
+        }else{
+          throw new Error('Compresión no soportada en el .docx');
+        }
+        return xmlATexto(xml);
+      }
+      p += 46 + lNom + lExt + lCom;
+    }
+    throw new Error('No encontré el texto dentro del .docx');
+  }
+
+  function xmlATexto(xml){
+    const W = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main';
+    const doc = new DOMParser().parseFromString(xml, 'application/xml');
+    if(doc.getElementsByTagName('parsererror').length) throw new Error('No entendí el formato del .docx');
+
+    function enFallback(n){
+      for(let a = n.parentNode; a; a = a.parentNode){ if(a.localName === 'Fallback') return true; }
+      return false;
+    }
+    function texto(n){
+      let t = '';
+      for(let i = 0; i < n.childNodes.length; i++){
+        const h = n.childNodes[i];
+        if(h.nodeType !== 1) continue;
+        const nom = h.localName;
+        if(nom === 't' && h.namespaceURI === W) t += h.textContent;
+        else if(nom === 'tab' && h.namespaceURI === W) t += '\t';
+        else if((nom === 'br' || nom === 'cr') && h.namespaceURI === W) t += '\n';
+        else if(nom === 'p' || nom === 'Fallback' || nom === 'delText' || nom === 'instrText') continue;
+        else t += texto(h);
+      }
+      return t;
+    }
+    const lineas = [];
+    const ps = doc.getElementsByTagNameNS(W, 'p');
+    function esLista(p){                           // w:p > w:pPr > w:numPr
+      for(let i = 0; i < p.childNodes.length; i++){
+        const h = p.childNodes[i];
+        if(h.localName === 'pPr' && h.namespaceURI === W){
+          for(let j = 0; j < h.childNodes.length; j++){
+            if(h.childNodes[j].localName === 'numPr') return true;
+          }
+        }
+      }
+      return false;
+    }
+    for(let i = 0; i < ps.length; i++){
+      if(enFallback(ps[i])) continue;              // los cuadros de texto vienen duplicados
+      const t = texto(ps[i]);
+      lineas.push(esLista(ps[i]) && t.trim() ? '\u2022 ' + t : t);
+    }
+    return lineas.join('\n');
+  }
+
+  /* ---------- Autoscroll ---------- */
+  function paso(t){
+    if(!reproduciendo) return;
+    if(!ultimo) ultimo = t;
+    const dt = (t - ultimo) / 1000;
+    ultimo = t;
+    resto += velocidad * dt;
+    const px = Math.floor(resto);
+    if(px > 0){
+      resto -= px;
+      const antes = visor.scrollTop;
+      visor.scrollTop = antes + px;
+      if(visor.scrollTop === antes) pausar();      // fin del guion
+    }
+    requestAnimationFrame(paso);
+  }
+  function reproducir(){
+    if(reproduciendo || editando) return;
+    if(guion.textContent.trim() === ''){ avisar('Primero carga un guion'); return; }
+    reproduciendo = true; ultimo = 0; resto = 0;
+    cuerpo.classList.add('reproduciendo');
+    $('btnPlay').textContent = '❚❚ Pausa';
+    ocultarInterfaz();
+    pedirCandado();
+    requestAnimationFrame(paso);
+  }
+  function pausar(){
+    reproduciendo = false;
+    cuerpo.classList.remove('reproduciendo');
+    $('btnPlay').textContent = '▶︎ Reproducir';
+    mostrarInterfaz();
+  }
+  function alternar(){ reproduciendo ? pausar() : reproducir(); }
+
+  /* ---------- Barra ---------- */
+  let tInterfaz = null;
+  function mostrarInterfaz(){
+    barra.classList.remove('oculta');
+    clearTimeout(tInterfaz);
+    if(reproduciendo && !editando) tInterfaz = setTimeout(ocultarInterfaz, 3000);
+  }
+  function ocultarInterfaz(){
+    if(editando) return;
+    barra.classList.add('oculta');
+    barra.classList.remove('con-ajustes');
+    $('btnAjustes').textContent = 'Ajustes ▾';
+  }
+  // Con el mouse, solo acercarse al borde de arriba muestra la barra:
+  // un roce accidental a media toma no la hace aparecer.
+  document.addEventListener('mousemove', function(e){
+    if(e.clientY < window.innerHeight * 0.15) mostrarInterfaz();
+  });
+
+  /* Tocar (o clic) en el texto: play/pausa. Tocar arriba: mostrar la barra. */
+  visor.addEventListener('click', function(e){
+    pedirCandado();
+    if(editando) return;
+    if(e.clientY < window.innerHeight * 0.18){ mostrarInterfaz(); return; }
+    alternar();
+  });
+
+  /* ---------- Rueda del mouse ---------- */
+  window.addEventListener('wheel', function(e){
+    if(editando || barra.contains(e.target)) return;
+    e.preventDefault();
+    let d = e.deltaY;
+    if(e.deltaMode === 1) d *= 40;
+    else if(e.deltaMode === 2) d *= visor.clientHeight;
+    if(invertirRueda) d = -d;
+    if(!ruedaVista){ ruedaVista = true; avisar('🖱 Rueda detectada'); }
+
+    if(modoRueda === 'texto'){
+      visor.scrollTop += d * valor('sens');
+    }else{
+      acumRueda += d;
+      const umbral = 60 / valor('sens');
+      let cambio = 0;
+      while(Math.abs(acumRueda) >= umbral){
+        const s = Math.sign(acumRueda);
+        acumRueda -= s * umbral;
+        cambio += s;
+      }
+      if(cambio){
+        ponerValor('vel', valor('vel') + cambio * 5);
+        aplicar();
+        avisar('Velocidad ' + valor('vel'), 900);
+      }
+    }
+  }, {passive:false});
+
+  /* ---------- Pantalla siempre encendida ---------- */
+  let candado = null, pidiendo = false;
+  async function pedirCandado(){
+    if(!('wakeLock' in navigator) || candado || pidiendo) return;
+    pidiendo = true;
+    try{
+      candado = await navigator.wakeLock.request('screen');
+      candado.addEventListener('release', function(){ candado = null; pintarEstado(); });
+    }catch(e){}
+    pidiendo = false;
+    pintarEstado();
+  }
+  document.addEventListener('visibilitychange', function(){
+    if(document.visibilityState === 'visible') pedirCandado();
+  });
+  function pintarEstado(){
+    $('estado').textContent = !('wakeLock' in navigator)
+      ? 'Pantalla siempre encendida: no disponible aquí. Pon Ajustes › Pantalla y brillo › Bloqueo automático en «Nunca».'
+      : (candado ? 'Pantalla siempre encendida: activa ✓'
+                 : 'Pantalla siempre encendida: se activa con el primer toque.');
+  }
+
+  /* ---------- Edicion ---------- */
+  function ponerEdicion(si){
+    editando = si;
+    if(si && reproduciendo) pausar();
+    guion.contentEditable = si ? 'true' : 'false';
+    cuerpo.classList.toggle('editando', si);
+    $('btnEditar').textContent = si ? '✓ Listo' : 'Editar';
+    $('btnEditar').classList.toggle('activo', si);
+    if(si){ mostrarInterfaz(); guion.focus(); }
+    else { guion.blur(); revisarVacio(); guardarGuion(); }
+  }
+  // Pegar dentro de la edicion: solo texto, sin el formato de Word
+  guion.addEventListener('paste', function(e){
+    if(!editando) return;
+    e.preventDefault();
+    const t = (e.clipboardData || window.clipboardData).getData('text/plain');
+    const frag = document.createDocumentFragment();
+    limpiar(t).forEach(function(l){
+      const p = document.createElement('p');
+      p.textContent = l === '' ? '\u00a0' : l;
+      frag.appendChild(p);
+    });
+    const sel = window.getSelection();
+    if(sel.rangeCount){ const r = sel.getRangeAt(0); r.deleteContents(); r.insertNode(frag); sel.collapseToEnd(); }
+    else guion.appendChild(frag);
+    revisarVacio(); guardarGuion();
+  });
+  guion.addEventListener('input', function(){ revisarVacio(); guardarGuion(); });
+
+  /* ---------- Botones ---------- */
+  function pintarBotones(){
+    $('btnEspejo').classList.toggle('activo', cuerpo.classList.contains('espejo'));
+    $('btnEspejoV').classList.toggle('activo', cuerpo.classList.contains('espejo-v'));
+    $('btnReticula').classList.toggle('activo', !$('reticula').classList.contains('oculta'));
+    $('btnLectura').classList.toggle('activo', !$('lectura').classList.contains('oculta'));
+    $('btnInvertir').classList.toggle('activo', invertirRueda);
+    $('btnRueda').textContent = modoRueda === 'texto' ? '🖱 Rueda: mueve texto' : '🖱 Rueda: velocidad';
+  }
+
+  $('btnPlay').onclick  = function(){ pedirCandado(); alternar(); };
+  $('btnReset').onclick = function(){ visor.scrollTop = 0; };
+  $('btnEditar').onclick = function(){ ponerEdicion(!editando); };
+
+  $('btnAbrir').onclick = function(){ pedirCandado(); archivo.click(); };
+  archivo.addEventListener('change', async function(){
+    const f = archivo.files && archivo.files[0];
+    archivo.value = '';
+    if(!f) return;
+    try{
+      let t;
+      if(/\.docx$/i.test(f.name)) t = await leerDocx(await f.arrayBuffer());
+      else if(/\.(txt|md)$/i.test(f.name) || (f.type || '').indexOf('text/') === 0) t = await f.text();
+      else throw new Error('No puedo abrir «' + f.name + '». Usa .docx o .txt');
+      const lineas = limpiar(t);
+      if(!lineas.length) throw new Error('El documento está vacío');
+      if(reproduciendo) pausar();
+      if(editando) ponerEdicion(false);
+      const n = ponerTexto(lineas);
+      avisar(f.name + '  ·  ' + n + ' palabras', 3000);
+    }catch(e){
+      avisar('⚠️ ' + (e.message || e), 4500);
+    }
+  });
+
+  $('btnPegar').onclick = async function(){
+    pedirCandado();
+    if(!navigator.clipboard || !navigator.clipboard.readText){
+      ponerEdicion(true); avisar('Mantén presionado el texto y elige «Pegar»', 3500); return;
+    }
+    try{
+      const lineas = limpiar(await navigator.clipboard.readText() || '');
+      if(!lineas.length){ avisar('El portapapeles no tiene texto'); return; }
+      if(reproduciendo) pausar();
+      const n = ponerTexto(lineas);
+      avisar('Guion pegado  ·  ' + n + ' palabras', 2500);
+    }catch(e){
+      ponerEdicion(true); avisar('Mantén presionado el texto y elige «Pegar»', 3500);
+    }
+  };
+
+  $('btnRueda').onclick = function(){
+    modoRueda = modoRueda === 'texto' ? 'velocidad' : 'texto';
+    acumRueda = 0;
+    pintarBotones(); guardarAjustes();
+    avisar(modoRueda === 'texto' ? 'La rueda mueve el texto' : 'La rueda cambia la velocidad');
+  };
+  $('btnAjustes').onclick = function(){
+    const abierto = barra.classList.toggle('con-ajustes');
+    this.textContent = abierto ? 'Ajustes ▴' : 'Ajustes ▾';
+    mostrarInterfaz();
+  };
+
+  const puedeFull = !!(raiz.requestFullscreen || raiz.webkitRequestFullscreen);
+  const comoApp = window.navigator.standalone === true ||
+                  matchMedia('(display-mode: standalone)').matches ||
+                  matchMedia('(display-mode: fullscreen)').matches;
+  if(comoApp || !puedeFull) $('btnFull').style.display = 'none';
+  $('btnFull').onclick = function(){
+    if(document.fullscreenElement || document.webkitFullscreenElement){
+      (document.exitFullscreen || document.webkitExitFullscreen).call(document);
+    }else{
+      (raiz.requestFullscreen || raiz.webkitRequestFullscreen).call(raiz);
+    }
+  };
+
+  function alternarClase(el, clase){ el.classList.toggle(clase); pintarBotones(); guardarAjustes(); }
+  $('btnEspejo').onclick   = function(){ alternarClase(cuerpo, 'espejo'); };
+  $('btnEspejoV').onclick  = function(){ alternarClase(cuerpo, 'espejo-v'); };
+  $('btnReticula').onclick = function(){ alternarClase($('reticula'), 'oculta'); };
+  $('btnLectura').onclick  = function(){ alternarClase($('lectura'), 'oculta'); };
+  $('btnInvertir').onclick = function(){
+    invertirRueda = !invertirRueda; acumRueda = 0;
+    pintarBotones(); guardarAjustes();
+  };
+  $('btnLimpiar').onclick = function(){
+    if(!confirm('¿Borrar el guion de este iPad?')) return;
+    if(reproduciendo) pausar();
+    guion.replaceChildren(); visor.scrollTop = 0;
+    revisarVacio(); guardarGuion();
+  };
+
+  /* ---------- Teclado Bluetooth / control remoto ----------
+     Los controles para teleprompter y los clickers de presentacion mandan
+     espacio, flechas o Av/Re Pag. */
+  document.addEventListener('keydown', function(e){
+    if(editando){
+      if(e.key === 'Escape'){ e.preventDefault(); ponerEdicion(false); }
+      return;
+    }
+    const foco = document.activeElement;
+    if(foco && (foco.tagName === 'INPUT' || foco.tagName === 'BUTTON')){
+      if(e.key === 'Escape') foco.blur();
+      return;
+    }
+    pedirCandado();
+    const k = e.key;
+    if(e.code === 'Space'){ e.preventDefault(); alternar(); return; }
+    if(k === 'ArrowUp'   && !e.metaKey){ e.preventDefault(); ponerValor('vel', valor('vel') + 5); aplicar(); avisar('Velocidad ' + valor('vel'), 900); return; }
+    if(k === 'ArrowDown' && !e.metaKey){ e.preventDefault(); ponerValor('vel', valor('vel') - 5); aplicar(); avisar('Velocidad ' + valor('vel'), 900); return; }
+    if(k === 'ArrowUp'   &&  e.metaKey){ e.preventDefault(); ponerValor('tam', valor('tam') + 2); aplicar(); return; }
+    if(k === 'ArrowDown' &&  e.metaKey){ e.preventDefault(); ponerValor('tam', valor('tam') - 2); aplicar(); return; }
+    if(k === 'ArrowLeft'  || k === 'PageUp'){   e.preventDefault(); visor.scrollTop -= 120; return; }
+    if(k === 'ArrowRight' || k === 'PageDown'){ e.preventDefault(); visor.scrollTop += 120; return; }
+    const l = k.toLowerCase();
+    if(l === 'r'){ visor.scrollTop = 0; }
+    else if(l === 'm'){ $('btnEspejo').click(); }
+    else if(l === 'g'){ $('btnReticula').click(); }
+    else if(l === 'h'){ barra.classList.contains('oculta') ? mostrarInterfaz() : ocultarInterfaz(); }
+  });
+
+  /* ---------- Arranque ---------- */
+  cargar();
+  aplicar();
+  pintarBotones();
+  revisarVacio();
+  pintarEstado();
+  mostrarInterfaz();
+
+  // Funcionar sin internet una vez instalada en la pantalla de inicio
+  if('serviceWorker' in navigator && location.protocol === 'https:'){
+    navigator.serviceWorker.register('sw.js').catch(function(){});
+  }
+
+  cuerpo.dataset.listo = '1';
+})();
+</script>
+</body>
+</html>
